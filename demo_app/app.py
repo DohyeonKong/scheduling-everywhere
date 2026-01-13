@@ -5,8 +5,16 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from .env file (local) or Streamlit secrets (cloud)
 load_dotenv()
+
+# Support Streamlit Cloud secrets
+import os
+try:
+    if "OPENAI_API_KEY" in st.secrets:
+        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+except FileNotFoundError:
+    pass  # No secrets file (running locally)
 
 # Page config
 st.set_page_config(
@@ -33,6 +41,43 @@ st.markdown("""
     div[data-testid="stCodeBlock"] {
         max-height: 400px;
         overflow-y: auto;
+    }
+    /* Loading modal overlay */
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+    }
+    .loading-modal {
+        background: white;
+        padding: 40px 60px;
+        border-radius: 15px;
+        text-align: center;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    .loading-modal h3 {
+        margin: 0 0 15px 0;
+        color: #1e3a5f;
+    }
+    .loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 5px solid #f3f3f3;
+        border-top: 5px solid #1e3a5f;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -130,7 +175,7 @@ with left_col:
     st.subheader("💬 Chat")
 
     # Chat container
-    chat_container = st.container(height=400)
+    chat_container = st.container(height=550)
 
     with chat_container:
         for message in st.session_state.messages:
@@ -165,46 +210,58 @@ with left_col:
                 "content": user_content
             })
 
+            # Show loading modal
+            loading_placeholder = st.empty()
+            loading_placeholder.markdown("""
+                <div class="loading-overlay">
+                    <div class="loading-modal">
+                        <div class="loading-spinner"></div>
+                        <h3>Thinking...</h3>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
             # Call OpenAI API
-            with st.spinner("Running..."):
-                try:
-                    client = openai.OpenAI()
+            try:
+                client = openai.OpenAI()
 
-                    # Build messages with system prompt
-                    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                    api_messages.extend(build_api_messages())
+                # Build messages with system prompt
+                api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                api_messages.extend(build_api_messages())
 
-                    response = client.chat.completions.create(
-                        model="gpt-5.2",
-                        max_completion_tokens=8192,
-                        messages=api_messages
-                    )
+                response = client.chat.completions.create(
+                    model="gpt-5.2",
+                    max_completion_tokens=8192,
+                    messages=api_messages
+                )
 
-                    assistant_response = response.choices[0].message.content
+                assistant_response = response.choices[0].message.content
 
-                    # Extract code blocks
-                    mzn_code, dzn_code = extract_code_blocks(assistant_response)
+                # Extract code blocks
+                mzn_code, dzn_code = extract_code_blocks(assistant_response)
 
-                    if mzn_code:
-                        st.session_state.mzn_code = mzn_code
-                    if dzn_code:
-                        st.session_state.dzn_code = dzn_code
+                if mzn_code:
+                    st.session_state.mzn_code = mzn_code
+                if dzn_code:
+                    st.session_state.dzn_code = dzn_code
 
-                    # Add assistant message
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": assistant_response
-                    })
+                # Add assistant message
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": assistant_response
+                })
 
-                    # Auto-save after each response
-                    save_chat_history()
+                # Auto-save after each response
+                save_chat_history()
 
-                except openai.APIConnectionError:
-                    st.error("Connection error. Check your internet connection.")
-                except openai.AuthenticationError:
-                    st.error("Authentication error. Check your OPENAI_API_KEY.")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+            except openai.APIConnectionError:
+                st.error("Connection error. Check your internet connection.")
+            except openai.AuthenticationError:
+                st.error("Authentication error. Check your OPENAI_API_KEY.")
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+            finally:
+                loading_placeholder.empty()
 
             st.rerun()
 
