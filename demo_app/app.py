@@ -2,19 +2,13 @@ import streamlit as st
 import openai
 import re
 import json
+import uuid
 from pathlib import Path
+from datetime import datetime
 from dotenv import load_dotenv
 
-# Load environment variables from .env file (local) or Streamlit secrets (cloud)
+# Load environment variables from .env file
 load_dotenv()
-
-# Support Streamlit Cloud secrets
-import os
-try:
-    if "OPENAI_API_KEY" in st.secrets:
-        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-except FileNotFoundError:
-    pass  # No secrets file (running locally)
 
 # Page config
 st.set_page_config(
@@ -38,6 +32,7 @@ st.markdown("""
     .stChatMessage {
         padding: 10px;
     }
+    /* Right column code blocks */
     div[data-testid="stCodeBlock"] {
         max-height: 400px;
         overflow-y: auto;
@@ -83,7 +78,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<div class="main-header"><h2>🏭 Scheduling, Everywhere [DEMO]</h2><p>Schedule Optimization Modeling Agent (Powered by GPT-5.2)</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h2>Scheduling, Everywhere [DEMO]</h2><p>Schedule Optimization Modeling Agent (Powered by GPT-5.2)</p></div>', unsafe_allow_html=True)
 
 # Paths
 APP_DIR = Path(__file__).parent.resolve()
@@ -92,7 +87,28 @@ DATA_DIR = PROJECT_DIR / "data"
 PROMPT_DIR = PROJECT_DIR / "prompt"
 SYSTEM_PROMPT_FILE = PROMPT_DIR / "system_prompt.txt"
 USER_PROMPT_FILE = PROMPT_DIR / "user_prompt.txt"
-CHAT_HISTORY_FILE = APP_DIR / "chat_history.json"
+CHAT_HISTORY_DIR = APP_DIR / "chat_histories"
+CHAT_HISTORY_DIR.mkdir(exist_ok=True)
+
+# Get client IP
+def get_client_ip():
+    try:
+        # Try to get from Streamlit headers (works with Cloudflare)
+        headers = st.context.headers
+        # Cloudflare passes real IP in these headers
+        for header in ["Cf-Connecting-Ip", "X-Forwarded-For", "X-Real-Ip"]:
+            if header in headers:
+                return headers[header].split(",")[0].strip()
+        return "unknown"
+    except:
+        return "local"
+
+# List saved chat histories
+def list_chat_histories():
+    histories = []
+    for f in sorted(CHAT_HISTORY_DIR.glob("*.json"), reverse=True):
+        histories.append(f.stem)
+    return histories
 
 # Load system prompt
 def load_system_prompt():
@@ -125,27 +141,45 @@ if "initialized" not in st.session_state:
     # Auto-load data files from data/ folder
     st.session_state.uploaded_files_content = load_data_files()
     st.session_state.user_input = load_user_prompt()
+    # Session tracking
+    st.session_state.client_ip = get_client_ip()
+    st.session_state.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # Save/Load chat history
-def save_chat_history():
+def save_chat_history(name=None):
+    if name is None:
+        name = datetime.now().strftime("%Y%m%d_%H%M%S")
     history = {
+        "client_ip": st.session_state.client_ip,
+        "session_start": st.session_state.session_start,
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "messages": st.session_state.messages,
         "mzn_code": st.session_state.mzn_code,
         "dzn_code": st.session_state.dzn_code
     }
-    CHAT_HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2))
+    filepath = CHAT_HISTORY_DIR / f"{name}.json"
+    filepath.write_text(json.dumps(history, ensure_ascii=False, indent=2))
+    return name
 
-def load_chat_history():
-    if CHAT_HISTORY_FILE.exists():
+def load_chat_history(name):
+    filepath = CHAT_HISTORY_DIR / f"{name}.json"
+    if filepath.exists():
         try:
-            history = json.loads(CHAT_HISTORY_FILE.read_text())
+            history = json.loads(filepath.read_text())
             st.session_state.messages = history.get("messages", [])
             st.session_state.mzn_code = history.get("mzn_code", "")
             st.session_state.dzn_code = history.get("dzn_code", "")
+            st.session_state.client_ip = history.get("client_ip", "unknown")
+            st.session_state.session_start = history.get("session_start", "")
             return True
         except:
             return False
     return False
+
+def auto_save():
+    """Auto-save current session"""
+    session_id = st.session_state.session_start.replace("-", "").replace(":", "").replace(" ", "_")
+    save_chat_history(f"session_{session_id}")
 
 # Extract code blocks from response
 def extract_code_blocks(text):
@@ -167,19 +201,67 @@ def build_api_messages():
         })
     return api_messages
 
+# Chat message colors CSS
+st.html("""
+<style>
+    /* User chat messages - light sky blue */
+    [class*="st-key-user"] {
+        background-color: #e0f2fe;
+        border-radius: 10px;
+        padding: 5px;
+    }
+    [class*="st-key-user"] .stChatMessage,
+    [class*="st-key-user"] pre,
+    [class*="st-key-user"] code {
+        background-color: transparent !important;
+    }
+
+    /* Assistant chat messages - deeper sky blue */
+    [class*="st-key-assistant"] {
+        background-color: #dbeafe;
+        border-radius: 10px;
+        padding: 5px;
+    }
+    [class*="st-key-assistant"] .stChatMessage,
+    [class*="st-key-assistant"] pre,
+    [class*="st-key-assistant"] code {
+        background-color: transparent !important;
+    }
+
+    /* Chat input textarea - light sky blue */
+    .stTextArea textarea {
+        background-color: #e0f2fe !important;
+        border-radius: 10px;
+    }
+
+    /* Right column code blocks (inside tabs) - deeper sky blue */
+    div[data-testid="stTabs"] pre,
+    div[data-testid="stTabs"] code,
+    .stTabs pre,
+    .stTabs code {
+        background-color: #dbeafe !important;
+        border-radius: 10px;
+    }
+</style>
+""")
+
+# Helper function for colored chat messages
+def chat_message(name):
+    return st.container(key=f"{name}-{uuid.uuid4()}").chat_message(name=name)
+
 # Two columns layout
 left_col, right_col = st.columns([1, 1], gap="medium")
 
 # ============ LEFT COLUMN: Chat Interface ============
 with left_col:
-    st.subheader("💬 Chat")
+    st.subheader("Chat")
 
     # Chat container
     chat_container = st.container(height=550)
 
     with chat_container:
         for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
+            with chat_message(name=message["role"]):
                 # Display full message including code blocks
                 st.markdown(message["content"])
 
@@ -204,10 +286,11 @@ with left_col:
                 for name, content in st.session_state.uploaded_files_content.items():
                     user_content += f"\n### {name}\n```csv\n{content}\n```\n"
 
-            # Add user message
+            # Add user message with timestamp
             st.session_state.messages.append({
                 "role": "user",
-                "content": user_content
+                "content": user_content,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
 
             # Show loading modal
@@ -245,14 +328,15 @@ with left_col:
                 if dzn_code:
                     st.session_state.dzn_code = dzn_code
 
-                # Add assistant message
+                # Add assistant message with timestamp
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": assistant_response
+                    "content": assistant_response,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
 
                 # Auto-save after each response
-                save_chat_history()
+                auto_save()
 
             except openai.APIConnectionError:
                 st.error("Connection error. Check your internet connection.")
@@ -276,31 +360,41 @@ with left_col:
                     lines = content.split('\n')[:6]
                     st.code('\n'.join(lines), language="csv")
 
+    # System prompt viewer
+    with st.popover("📋 View System Prompt", use_container_width=True):
+        st.markdown("**System Prompt:**")
+        st.code(SYSTEM_PROMPT, language="markdown")
+
     # Chat history controls
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("💾 Save Chat", use_container_width=True):
-            save_chat_history()
-            st.toast("Chat saved!")
+        if st.button("💾 Save", use_container_width=True):
+            name = save_chat_history()
+            st.toast(f"Saved: {name}")
     with col2:
-        if st.button("📂 Load Chat", use_container_width=True):
-            if load_chat_history():
-                st.toast("Chat loaded!")
-                st.rerun()
-            else:
-                st.toast("No saved chat found")
+        histories = list_chat_histories()
+        if histories:
+            selected = st.selectbox("📂 Load", histories, label_visibility="collapsed")
+            if st.button("Load", use_container_width=True):
+                if load_chat_history(selected):
+                    st.toast(f"Loaded: {selected}")
+                    st.rerun()
+        else:
+            st.button("📂 Load", disabled=True, use_container_width=True)
     with col3:
-        if st.button("🗑️ Clear Chat", use_container_width=True):
+        if st.button("🗑️ New Chat", use_container_width=True):
             st.session_state.messages = []
             st.session_state.mzn_code = "% model.mzn will appear here..."
             st.session_state.dzn_code = "% data.dzn will appear here..."
             st.session_state.user_input = load_user_prompt()
             st.session_state.uploaded_files_content = load_data_files()
+            st.session_state.client_ip = get_client_ip()
+            st.session_state.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             st.rerun()
 
 # ============ RIGHT COLUMN: MiniZinc Output ============
 with right_col:
-    st.subheader("📄 MiniZinc Output")
+    st.subheader("MiniZinc Output")
 
     # Tabs for .mzn and .dzn
     tab1, tab2 = st.tabs(["model.mzn", "data.dzn"])

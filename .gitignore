@@ -18,8 +18,8 @@ build/
 # Output files (generated)
 output/
 
-# Chat history (contains conversation data)
-chat_history.json
+# Chat histories (contains conversation data with IPs)
+chat_histories/
 
 # IDE
 .idea/

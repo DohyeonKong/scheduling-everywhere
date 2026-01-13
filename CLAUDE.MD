@@ -85,7 +85,7 @@ Find minimum machines/side-shifts needed (compact operation)
     ├── requirements.txt   # Python dependencies
     ├── .env               # API key (edit with your key)
     ├── venv-macbook/      # Virtual environment for macOS
-    └── chat_history.json  # Saved chat thread (auto-generated)
+    └── chat_histories/    # Saved chat sessions with IP/timestamps (auto-generated)
 ```
 
 ### Data Summary
@@ -133,19 +133,25 @@ to generate the `.dzn` file separately.
 - **Pre-filled prompt**: User prompt from `prompt/user_prompt.txt` ready to send
 - **UI-aware LLM**: System prompt tells LLM about the split-screen layout
 - **Code highlighting**: Syntax highlighting for MiniZinc
-- **Chat history**: Save/Load conversation thread
+- **Multiple chat histories**: Save/Load multiple conversations with timestamps
+- **IP tracking**: Records client IP for each session (via Cloudflare headers)
+- **Auto-save**: Automatically saves after each LLM response
+- **System prompt viewer**: Button to view the system prompt
+- **Colored UI**: Sky blue theme for chat messages, input box, and code blocks
 - **Download**: Export model.mzn and data.dzn files
+- **Cloudflare Tunnel**: Share demo via public URL (quick tunnel)
 
 ### UI Layout (Left Column)
-1. Chat messages (conversation history)
-2. Text input (pre-filled with user_prompt.txt)
+1. Chat messages (colored: user=light sky blue, assistant=soft blue)
+2. Text input (pre-filled with user_prompt.txt, sky blue background)
 3. Send button
 4. Data files expander (shows 3 auto-loaded CSVs)
-5. Save/Load/Clear buttons
+5. System prompt viewer button
+6. Save/Load/New Chat buttons
 
 ### UI Layout (Right Column)
-1. model.mzn tab with code display
-2. data.dzn tab with code display
+1. model.mzn tab with code display (soft blue background)
+2. data.dzn tab with code display (soft blue background)
 3. Download buttons for each file
 
 ### Running the App
@@ -178,6 +184,23 @@ streamlit run app.py
 3. **View output** - model.mzn and data.dzn appear on right
 4. **Follow-up** - Ask questions about the generated code
 5. **Iterate** - Refine model through conversation
+
+### Sharing via Cloudflare Tunnel
+
+To share the demo with others (e.g., professors) without server setup:
+
+```bash
+# Install cloudflared (macOS)
+brew install cloudflared
+
+# Start app locally
+streamlit run app.py --server.port 8501
+
+# In another terminal, create quick tunnel
+cloudflared tunnel --url http://localhost:8501
+```
+
+This generates a public URL like `https://xxx-xxx.trycloudflare.com` that anyone can access.
 
 ---
 
