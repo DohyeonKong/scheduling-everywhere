@@ -1,11 +1,19 @@
 import streamlit as st
 import openai
-import re
 import json
 import uuid
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+from pydantic import BaseModel
+from typing import Optional
+
+# Structured output model
+class ModelingResponse(BaseModel):
+    explanation: str
+    math_model: Optional[str] = None
+    mzn_code: Optional[str] = None
+    dzn_code: Optional[str] = None
 
 # Load environment variables from .env file
 load_dotenv()
@@ -78,7 +86,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<div class="main-header"><h2>Scheduling, Everywhere [DEMO]</h2><p>Schedule Optimization Modeling Agent (Powered by GPT-5.2)</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h2>Scheduling, Everywhere [DEMO]</h2><p>Scheduling Problem Modeling Agent (Powered by GPT-5.2)</p></div>', unsafe_allow_html=True)
 
 # Paths
 APP_DIR = Path(__file__).parent.resolve()
@@ -136,6 +144,7 @@ SYSTEM_PROMPT = load_system_prompt()
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     st.session_state.messages = []
+    st.session_state.math_model = "Mathematical formulation will appear here after generation..."
     st.session_state.mzn_code = "% model.mzn will appear here after generation..."
     st.session_state.dzn_code = "% data.dzn will appear here after generation..."
     # Auto-load data files from data/ folder
@@ -154,6 +163,7 @@ def save_chat_history(name=None):
         "session_start": st.session_state.session_start,
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "messages": st.session_state.messages,
+        "math_model": st.session_state.math_model,
         "mzn_code": st.session_state.mzn_code,
         "dzn_code": st.session_state.dzn_code
     }
@@ -167,6 +177,7 @@ def load_chat_history(name):
         try:
             history = json.loads(filepath.read_text())
             st.session_state.messages = history.get("messages", [])
+            st.session_state.math_model = history.get("math_model", "")
             st.session_state.mzn_code = history.get("mzn_code", "")
             st.session_state.dzn_code = history.get("dzn_code", "")
             st.session_state.client_ip = history.get("client_ip", "unknown")
@@ -178,18 +189,8 @@ def load_chat_history(name):
 
 def auto_save():
     """Auto-save current session"""
-    session_id = st.session_state.session_start.replace("-", "").replace(":", "").replace(" ", "_")
-    save_chat_history(f"session_{session_id}")
-
-# Extract code blocks from response
-def extract_code_blocks(text):
-    mzn_match = re.search(r'```(?:mzn|minizinc)\n(.*?)```', text, re.DOTALL)
-    dzn_match = re.search(r'```dzn\n(.*?)```', text, re.DOTALL)
-
-    mzn_code = mzn_match.group(1).strip() if mzn_match else None
-    dzn_code = dzn_match.group(1).strip() if dzn_match else None
-
-    return mzn_code, dzn_code
+    session_id = st.session_state.session_start.replace("-", "").replace(":", "").replace(" ", "")
+    save_chat_history(f"{session_id}_session")
 
 # Build messages for API call
 def build_api_messages():
@@ -228,9 +229,9 @@ st.html("""
         background-color: transparent !important;
     }
 
-    /* Chat input textarea - light sky blue */
+    /* Chat input textarea - grey */
     .stTextArea textarea {
-        background-color: #e0f2fe !important;
+        background-color: #f3f4f6 !important;
         border-radius: 10px;
     }
 
@@ -275,7 +276,7 @@ with left_col:
 
     if st.button("Send", type="primary", use_container_width=True):
         if user_input.strip():
-            # Update session state
+            # Clear input for next run
             st.session_state.user_input = ""
 
             # Build user message with file contents if first message
@@ -304,7 +305,7 @@ with left_col:
                 </div>
             """, unsafe_allow_html=True)
 
-            # Call OpenAI API
+            # Call OpenAI API with structured output
             try:
                 client = openai.OpenAI()
 
@@ -312,21 +313,22 @@ with left_col:
                 api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                 api_messages.extend(build_api_messages())
 
-                response = client.chat.completions.create(
+                response = client.responses.parse(
                     model="gpt-5.2",
-                    max_completion_tokens=8192,
-                    messages=api_messages
+                    input=api_messages,
+                    text_format=ModelingResponse
                 )
 
-                assistant_response = response.choices[0].message.content
+                result = response.output_parsed
+                assistant_response = result.explanation
 
-                # Extract code blocks
-                mzn_code, dzn_code = extract_code_blocks(assistant_response)
-
-                if mzn_code:
-                    st.session_state.mzn_code = mzn_code
-                if dzn_code:
-                    st.session_state.dzn_code = dzn_code
+                # Update panels from structured output
+                if result.math_model:
+                    st.session_state.math_model = result.math_model
+                if result.mzn_code:
+                    st.session_state.mzn_code = result.mzn_code
+                if result.dzn_code:
+                    st.session_state.dzn_code = result.dzn_code
 
                 # Add assistant message with timestamp
                 st.session_state.messages.append({
@@ -384,6 +386,7 @@ with left_col:
     with col3:
         if st.button("🗑️ New Chat", use_container_width=True):
             st.session_state.messages = []
+            st.session_state.math_model = "Mathematical formulation will appear here..."
             st.session_state.mzn_code = "% model.mzn will appear here..."
             st.session_state.dzn_code = "% data.dzn will appear here..."
             st.session_state.user_input = load_user_prompt()
@@ -392,18 +395,22 @@ with left_col:
             st.session_state.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             st.rerun()
 
-# ============ RIGHT COLUMN: MiniZinc Output ============
+# ============ RIGHT COLUMN: Output ============
 with right_col:
-    st.subheader("MiniZinc Output")
+    st.subheader("Output")
 
-    # Tabs for .mzn and .dzn
-    tab1, tab2 = st.tabs(["model.mzn", "data.dzn"])
+    # Main tabs: Math Model and MiniZinc
+    tab_math, tab_mzn = st.tabs(["Math Model", "MiniZinc"])
 
-    with tab1:
-        st.code(st.session_state.mzn_code, language="minizinc", line_numbers=True)
+    with tab_math:
+        st.markdown(st.session_state.math_model)
 
-        col1, col2 = st.columns(2)
-        with col1:
+    with tab_mzn:
+        # Sub-tabs for .mzn and .dzn
+        sub_tab1, sub_tab2 = st.tabs(["model.mzn", "data.dzn"])
+
+        with sub_tab1:
+            st.code(st.session_state.mzn_code, language="minizinc", line_numbers=True)
             st.download_button(
                 label="📥 Download .mzn",
                 data=st.session_state.mzn_code,
@@ -411,15 +418,9 @@ with right_col:
                 mime="text/plain",
                 use_container_width=True
             )
-        with col2:
-            if st.button("📋 Copy .mzn", use_container_width=True):
-                st.toast("Use Ctrl+C to copy from code block above")
 
-    with tab2:
-        st.code(st.session_state.dzn_code, language="minizinc", line_numbers=True)
-
-        col1, col2 = st.columns(2)
-        with col1:
+        with sub_tab2:
+            st.code(st.session_state.dzn_code, language="minizinc", line_numbers=True)
             st.download_button(
                 label="📥 Download .dzn",
                 data=st.session_state.dzn_code,
@@ -427,7 +428,3 @@ with right_col:
                 mime="text/plain",
                 use_container_width=True
             )
-        with col2:
-            if st.button("📋 Copy .dzn", use_container_width=True):
-                st.toast("Use Ctrl+C to copy from code block above")
-

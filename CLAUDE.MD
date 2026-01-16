@@ -68,9 +68,10 @@ Find minimum machines/side-shifts needed (compact operation)
 ```
 260126-SchedulingAgent/
 ├── CLAUDE.MD              # This file - project overview
+├── DEVLOG.md              # Development log / research journey
 ├── test_prompt.py         # Standalone test script for prompt
 ├── prompt/
-│   ├── system_prompt.txt  # LLM system instructions (UI-aware)
+│   ├── system_prompt.txt  # LLM system instructions (structured output)
 │   └── user_prompt.txt    # Domain expert's problem description
 ├── data/
 │   ├── demand.csv         # 372 orders (MOLD, SIZE, COLOR, QTY, DUE_DATE)
@@ -85,7 +86,7 @@ Find minimum machines/side-shifts needed (compact operation)
     ├── requirements.txt   # Python dependencies
     ├── .env               # API key (edit with your key)
     ├── venv-macbook/      # Virtual environment for macOS
-    └── chat_histories/    # Saved chat sessions with IP/timestamps (auto-generated)
+    └── chat_histories/    # Saved chat sessions (yyyymmddhhmmss_session.json)
 ```
 
 ### Data Summary
@@ -125,34 +126,49 @@ to generate the `.dzn` file separately.
 ## Demo App
 
 **Title**: Scheduling, Everywhere [DEMO]
-**Subtitle**: Schedule Optimization Modeling Agent (Powered by GPT-5.2)
+**Subtitle**: Scheduling Problem Modeling Agent (Powered by GPT-5.2)
+**URL**: https://scheduling.idea-lab.tech (via Cloudflare Named Tunnel)
 
 ### App Features
-- **Split-screen layout**: Chat on left, MiniZinc output on right
+- **Split-screen layout**: Chat on left, output tabs on right
+- **Structured output**: LLM returns structured response (explanation, math_model, mzn_code, dzn_code)
+- **Math Model tab**: Mathematical formulation with LaTeX rendering
 - **Auto-loaded data**: CSV files from `data/` folder pre-loaded on startup
 - **Pre-filled prompt**: User prompt from `prompt/user_prompt.txt` ready to send
-- **UI-aware LLM**: System prompt tells LLM about the split-screen layout
-- **Code highlighting**: Syntax highlighting for MiniZinc
-- **Multiple chat histories**: Save/Load multiple conversations with timestamps
+- **Multiple chat histories**: Save/Load with timestamps (yyyymmddhhmmss_session)
 - **IP tracking**: Records client IP for each session (via Cloudflare headers)
 - **Auto-save**: Automatically saves after each LLM response
 - **System prompt viewer**: Button to view the system prompt
-- **Colored UI**: Sky blue theme for chat messages, input box, and code blocks
+- **Colored UI**: Sky blue theme for chat messages and code blocks
 - **Download**: Export model.mzn and data.dzn files
-- **Cloudflare Tunnel**: Share demo via public URL (quick tunnel)
+- **Custom domain**: https://scheduling.idea-lab.tech via Cloudflare Named Tunnel
 
 ### UI Layout (Left Column)
 1. Chat messages (colored: user=light sky blue, assistant=soft blue)
-2. Text input (pre-filled with user_prompt.txt, sky blue background)
+2. Text input (pre-filled with user_prompt.txt, grey background)
 3. Send button
 4. Data files expander (shows 3 auto-loaded CSVs)
 5. System prompt viewer button
 6. Save/Load/New Chat buttons
 
 ### UI Layout (Right Column)
-1. model.mzn tab with code display (soft blue background)
-2. data.dzn tab with code display (soft blue background)
+1. **Math Model** tab - Mathematical formulation (LaTeX)
+2. **MiniZinc** tab (with sub-tabs):
+   - model.mzn - Constraint model code
+   - data.dzn - Data file
 3. Download buttons for each file
+
+### Structured Output Format
+
+The LLM returns a Pydantic model with four fields:
+
+```python
+class ModelingResponse(BaseModel):
+    explanation: str           # Chat response (left column)
+    math_model: Optional[str]  # Mathematical formulation (right > Math Model)
+    mzn_code: Optional[str]    # MiniZinc model (right > MiniZinc > model.mzn)
+    dzn_code: Optional[str]    # MiniZinc data (right > MiniZinc > data.dzn)
+```
 
 ### Running the App
 
@@ -174,48 +190,59 @@ pip install -r requirements.txt
 # OPENAI_API_KEY=sk-your-actual-key
 
 # 6. Run the app
-streamlit run app.py
+streamlit run app.py --server.port 8501
 ```
 
 ### Demo Flow (Streamlined)
 
 1. **Start app** - Data files auto-loaded, prompt pre-filled
-2. **Click Send** - LLM generates MiniZinc model
-3. **View output** - model.mzn and data.dzn appear on right
-4. **Follow-up** - Ask questions about the generated code
-5. **Iterate** - Refine model through conversation
+2. **Click Send** - LLM generates structured response
+3. **View Math Model** - Mathematical formulation appears in right column
+4. **View MiniZinc** - model.mzn and data.dzn in sub-tabs
+5. **Follow-up** - Ask questions, refine model through conversation
 
-### Sharing via Cloudflare Tunnel
+### Cloudflare Named Tunnel (Custom Domain)
 
-To share the demo with others (e.g., professors) without server setup:
+To serve the app via custom domain:
 
 ```bash
-# Install cloudflared (macOS)
-brew install cloudflared
+# One-time setup (already done)
+cloudflared tunnel login
+cloudflared tunnel create scheduling-demo
+cloudflared tunnel route dns scheduling-demo scheduling.idea-lab.tech
 
-# Start app locally
-streamlit run app.py --server.port 8501
-
-# In another terminal, create quick tunnel
-cloudflared tunnel --url http://localhost:8501
+# Run the tunnel
+cloudflared tunnel run scheduling-demo
 ```
 
-This generates a public URL like `https://xxx-xxx.trycloudflare.com` that anyone can access.
+Config file at `~/.cloudflared/config.yml`:
+```yaml
+tunnel: <tunnel-id>
+credentials-file: ~/.cloudflared/<tunnel-id>.json
+
+ingress:
+  - hostname: scheduling.idea-lab.tech
+    service: http://localhost:8501
+  - service: http_status:404
+```
 
 ---
 
 ## System Prompt Architecture
 
-The system prompt includes **UI Context** so the LLM understands:
-- User sees chat on LEFT, generated code on RIGHT
-- After code generation, user can see the .mzn/.dzn files
-- Follow-up questions like "explain line 15" refer to visible code
+The system prompt uses **structured output** format:
 
-### System Prompt Sections
-1. **UI Context** - Split-screen layout awareness
-2. **Output Format** - Code fence tags for extraction
-3. **model.mzn structure** - Parameters, Variables, Constraints, Objective
-4. **data.dzn format** - How to convert CSV data
+### Output Fields
+1. **explanation** - Conversational response (left column)
+2. **math_model** - Mathematical formulation with LaTeX (right > Math Model)
+3. **mzn_code** - MiniZinc model code (right > MiniZinc > model.mzn)
+4. **dzn_code** - MiniZinc data file (right > MiniZinc > data.dzn)
+
+### Math Model Format
+Uses LaTeX with `$...$` (inline) and `$$...$$` (block):
+- Sets, Parameters, Decision Variables
+- Constraints with mathematical notation
+- Objective function
 
 ---
 
@@ -256,7 +283,12 @@ The script:
 
 ### Model: GPT-5.2
 - Used for both demo app and test script
-- max_completion_tokens: 8192
+- Structured output via Pydantic
+
+### Why Structured Output?
+- More reliable than regex extraction
+- Separates explanation from code
+- Enables Math Model tab alongside code
 
 ---
 
